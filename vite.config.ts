@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
-// Served from https://sam-echostate.github.io/guitar-tabs/ in production,
+// Served from https://sam-platform.github.io/guitar-tabs/ in production,
 // so assets/manifest need a matching base path and relative start_url/scope.
 const REPO_BASE = "/guitar-tabs/";
 
