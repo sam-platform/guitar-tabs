@@ -16,5 +16,6 @@ export interface TabSong {
   title: string;
   stringCount: number;
   lines: TabLine[];
-  importedAt: string;
+  /** ISO timestamp of import, or of the last edit for songs written in-app. */
+  updatedAt: string;
 }

@@ -1,7 +1,10 @@
 import "./style.css";
 import { importTabFile, TabImportError } from "./tab/importTab";
+import { createEmptySong } from "./tab/newSong";
 import { renderSongToElement } from "./render/renderTab";
-import { deleteSong, listSongs, saveSong, type StoredSong } from "./storage/db";
+import { renderSongEditor } from "./edit/editTab";
+import { showConfirm } from "./ui/confirmDialog";
+import { deleteSong, listSongs, saveSong, updateSong, type StoredSong } from "./storage/db";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -9,10 +12,13 @@ app.innerHTML = `
   <div class="shell">
     <header class="topbar">
       <h1>My Tabs</h1>
-      <label class="import-button">
-        + Import .tab
-        <input type="file" id="file-input" accept=".tab" multiple hidden />
-      </label>
+      <div class="topbar-actions">
+        <button class="new-button" id="new-song-button" type="button">+ New</button>
+        <label class="import-button">
+          + Import .tab
+          <input type="file" id="file-input" accept=".tab" multiple hidden />
+        </label>
+      </div>
     </header>
 
     <div class="status" id="status" hidden></div>
@@ -21,19 +27,22 @@ app.innerHTML = `
 
     <main class="viewer" id="viewer">
       <p class="empty-hint">
-        Import a .tab file from the old tab builder app, or pick a song from
-        the list.
+        Import a .tab file from the old tab builder app, write a new one, or
+        pick a song from the list.
       </p>
     </main>
   </div>
 `;
 
 const fileInput = document.querySelector<HTMLInputElement>("#file-input")!;
+const newSongButton = document.querySelector<HTMLButtonElement>("#new-song-button")!;
 const songListEl = document.querySelector<HTMLElement>("#song-list")!;
 const viewerEl = document.querySelector<HTMLElement>("#viewer")!;
 const statusEl = document.querySelector<HTMLElement>("#status")!;
 
 let currentSongId: string | null = null;
+let currentMode: "view" | "edit" = "view";
+let autosaveTimer: number | undefined;
 
 function showStatus(message: string, kind: "info" | "error" = "info") {
   statusEl.textContent = message;
@@ -73,7 +82,8 @@ async function refreshSongList() {
     deleteBtn.title = "Delete";
     deleteBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!confirm(`Delete "${song.title}"?`)) return;
+      const ok = await showConfirm(`Delete "${song.title}"? This can't be undone.`);
+      if (!ok) return;
       await deleteSong(song.id);
       if (currentSongId === song.id) {
         currentSongId = null;
@@ -88,14 +98,53 @@ async function refreshSongList() {
   }
 }
 
-function openSong(song: StoredSong) {
-  currentSongId = song.id;
+function scheduleAutosave(song: StoredSong) {
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosaveTimer = window.setTimeout(async () => {
+    song.updatedAt = new Date().toISOString();
+    await updateSong(song);
+    await refreshSongList();
+  }, 500);
+}
+
+function renderViewer(song: StoredSong) {
   viewerEl.innerHTML = "";
-  const heading = document.createElement("h2");
-  heading.className = "song-title";
-  heading.textContent = song.title;
-  viewerEl.appendChild(heading);
-  viewerEl.appendChild(renderSongToElement(song));
+
+  const header = document.createElement("div");
+  header.className = "viewer-header";
+
+  if (currentMode === "view") {
+    const heading = document.createElement("h2");
+    heading.className = "song-title";
+    heading.textContent = song.title;
+    header.appendChild(heading);
+  } else {
+    header.appendChild(document.createElement("div"));
+  }
+
+  const modeBtn = document.createElement("button");
+  modeBtn.type = "button";
+  modeBtn.className = "mode-toggle";
+  modeBtn.textContent = currentMode === "view" ? "Edit" : "Done";
+  modeBtn.addEventListener("click", () => {
+    currentMode = currentMode === "view" ? "edit" : "view";
+    renderViewer(song);
+  });
+  header.appendChild(modeBtn);
+
+  viewerEl.appendChild(header);
+
+  if (currentMode === "edit") {
+    viewerEl.appendChild(renderSongEditor(song, { onChange: () => scheduleAutosave(song) }));
+  } else {
+    viewerEl.appendChild(renderSongToElement(song));
+  }
+}
+
+function openSong(song: StoredSong, mode: "view" | "edit" = "view") {
+  currentSongId = song.id;
+  currentMode = mode;
+  renderViewer(song);
   refreshSongList();
 }
 
@@ -129,6 +178,14 @@ fileInput.addEventListener("change", async () => {
 
   fileInput.value = "";
   await refreshSongList();
+});
+
+newSongButton.addEventListener("click", async () => {
+  const stored = await saveSong(createEmptySong());
+  openSong(stored, "edit");
+  const titleInput = viewerEl.querySelector<HTMLInputElement>(".editor-title-input");
+  titleInput?.focus();
+  titleInput?.select();
 });
 
 refreshSongList();

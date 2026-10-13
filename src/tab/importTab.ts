@@ -70,6 +70,6 @@ export function importTabFile(buffer: ArrayBuffer, fileName: string): TabSong {
     title: titleFromFileName(fileName),
     stringCount,
     lines,
-    importedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
 }

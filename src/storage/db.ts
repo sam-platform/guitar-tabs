@@ -38,6 +38,16 @@ export async function saveSong(song: TabSong): Promise<StoredSong> {
   return stored;
 }
 
+export async function updateSong(song: StoredSong): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).put(song);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 export async function listSongs(): Promise<StoredSong[]> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
@@ -45,7 +55,7 @@ export async function listSongs(): Promise<StoredSong[]> {
     const req = tx.objectStore(STORE).getAll();
     req.onsuccess = () => {
       const songs = req.result as StoredSong[];
-      songs.sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+      songs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
       resolve(songs);
     };
     req.onerror = () => reject(req.error);
