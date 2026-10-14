@@ -1,32 +1,37 @@
-import type { TabLine, TabSong } from "../tab/model";
+import type { TabChord, TabLine, TabSong } from "../tab/model";
 
 const MIN_STRINGS = 4;
 const MAX_STRINGS = 8;
 
-const KEYPAD_DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
-/** Non-numeric symbols a fret cell can hold, per the TabChord format. */
-const KEYPAD_SYMBOLS = ["h", "p", "b", "/", "\\", "x", "|"];
+const MIN_FRET = 0;
+const MAX_FRET = 24;
+/** Symbols a fret cell can hold, ordered nearest-to-blank first (closest when scrolling up). */
+const WHEEL_SYMBOLS = ["h", "p", "b", "/", "\\", "x", "|"];
+/** One wheel's full scrollable option list, top-to-bottom: symbols, blank, then 0..24. */
+const WHEEL_VALUES: string[] = [
+  ...[...WHEEL_SYMBOLS].reverse(),
+  "",
+  ...Array.from({ length: MAX_FRET - MIN_FRET + 1 }, (_, i) => String(MIN_FRET + i)),
+];
+const WHEEL_BLANK_INDEX = WHEEL_SYMBOLS.length;
+/** Must match the height (px) of a .note-wheel__item in style.css. */
+const WHEEL_ITEM_HEIGHT = 36;
 
 export interface EditSongOptions {
   /** Called after any mutation to `song` (cell edit, add/remove, title/annotation change). */
   onChange: () => void;
 }
 
-interface PendingFocus {
-  lineIndex: number;
-  colIndex: number;
-  stringIndex: number;
-}
-
 /**
  * Renders an interactive editor for `song`. Mutates `song` in place as the
- * user types/taps, so the caller's own reference stays current for
- * autosaving — this module never owns a copy of the data.
+ * user acts, so the caller's own reference stays current for autosaving —
+ * this module never owns a copy of the data.
  *
- * Text input (cell/annotation/title edits) mutates the model and leaves the
- * DOM alone, since the input element already reflects what was typed.
- * Structural changes (add/remove column or line) rebuild the affected
- * subtree, since there's no focused keystroke to preserve.
+ * Notes are entered through a dedicated keypad (scroll wheels, one per
+ * string, plus Enter/Space/Delete/Reset/Return) that always targets the
+ * last line — there is no direct tap-to-edit on placed note cells, which
+ * are rendered read-only. Any change re-renders the whole line list, since
+ * nothing in the grid holds keyboard focus to preserve.
  */
 export function renderSongEditor(song: TabSong, opts: EditSongOptions): HTMLElement {
   const container = document.createElement("div");
@@ -56,6 +61,80 @@ export function renderSongEditor(song: TabSong, opts: EditSongOptions): HTMLElem
   stringsRow.append(stringsLabel, stringsDec, stringsInc);
   container.appendChild(stringsRow);
 
+  const linesEl = document.createElement("div");
+  linesEl.className = "editor-lines";
+  container.appendChild(linesEl);
+
+  /** Staged values for the note currently being built, one per string — not
+   * yet part of the song until Enter commits them. */
+  let pending: string[] = new Array(song.stringCount).fill("");
+  let wheelEls: HTMLDivElement[] = [];
+
+  function activeLine(): TabLine {
+    return song.lines[song.lines.length - 1];
+  }
+
+  function resetPending() {
+    pending = new Array(song.stringCount).fill("");
+    wheelEls.forEach((wheel) => {
+      wheel.scrollTop = WHEEL_BLANK_INDEX * WHEEL_ITEM_HEIGHT;
+      highlightWheel(wheel, WHEEL_BLANK_INDEX);
+    });
+  }
+
+  function highlightWheel(wheel: HTMLDivElement, centeredIndex: number) {
+    const items = wheel.querySelectorAll(".note-wheel__item");
+    items.forEach((el) => el.classList.remove("note-wheel__item--selected"));
+    items[centeredIndex]?.classList.add("note-wheel__item--selected");
+  }
+
+  function buildWheel(stringIndex: number): HTMLDivElement {
+    const wheel = document.createElement("div");
+    wheel.className = "note-wheel";
+    // The track is padded by one item-height top and bottom, so the first
+    // and last real options can still be scrolled into the centered
+    // selection band rather than being stuck at the wheel's edge.
+    const track = document.createElement("div");
+    track.className = "note-wheel__track";
+    WHEEL_VALUES.forEach((value, idx) => {
+      const item = document.createElement("div");
+      item.className = "note-wheel__item" + (value === "" ? " note-wheel__item--blank" : "");
+      item.textContent = value === "" ? "–" : value;
+      item.addEventListener("click", () => {
+        wheel.scrollTo({ top: idx * WHEEL_ITEM_HEIGHT, behavior: "smooth" });
+      });
+      track.appendChild(item);
+    });
+    wheel.appendChild(track);
+    wheel.addEventListener("scroll", () => {
+      const idx = Math.max(0, Math.min(WHEEL_VALUES.length - 1, Math.round(wheel.scrollTop / WHEEL_ITEM_HEIGHT)));
+      pending[stringIndex] = WHEEL_VALUES[idx];
+      highlightWheel(wheel, idx);
+    });
+    // Deferred: the wheel has no layout box yet (not attached to the
+    // document until the caller inserts the editor), so scrollTop would
+    // silently no-op if set synchronously here.
+    requestAnimationFrame(() => {
+      wheel.scrollTop = WHEEL_BLANK_INDEX * WHEEL_ITEM_HEIGHT;
+      highlightWheel(wheel, WHEEL_BLANK_INDEX);
+    });
+    return wheel;
+  }
+
+  const wheelsRow = document.createElement("div");
+  wheelsRow.className = "note-keypad__wheels";
+
+  function rebuildWheels() {
+    wheelsRow.innerHTML = "";
+    wheelEls = [];
+    for (let s = 0; s < song.stringCount; s++) {
+      const wheel = buildWheel(s);
+      wheelEls.push(wheel);
+      wheelsRow.appendChild(wheel);
+    }
+    pending = new Array(song.stringCount).fill("");
+  }
+
   function resizeStrings(delta: number) {
     const next = song.stringCount + delta;
     if (next < MIN_STRINGS || next > MAX_STRINGS) return;
@@ -67,131 +146,35 @@ export function renderSongEditor(song: TabSong, opts: EditSongOptions): HTMLElem
       }
     }
     stringsLabel.textContent = `Strings: ${song.stringCount}`;
+    rebuildWheels();
     opts.onChange();
     renderLines();
   }
   stringsDec.addEventListener("click", () => resizeStrings(-1));
   stringsInc.addEventListener("click", () => resizeStrings(1));
 
-  const linesEl = document.createElement("div");
-  linesEl.className = "editor-lines";
-  container.appendChild(linesEl);
-
-  let pendingFocus: PendingFocus | null = null;
-  let activeCell: HTMLInputElement | null = null;
-
-  function insertAtCursor(el: HTMLInputElement, text: string) {
-    const start = el.selectionStart ?? el.value.length;
-    const end = el.selectionEnd ?? el.value.length;
-    const next = el.value.slice(0, start) + text + el.value.slice(end);
-    if (el.maxLength >= 0 && next.length > el.maxLength) return;
-    el.value = next;
-    const pos = start + text.length;
-    el.setSelectionRange(pos, pos);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  function replaceActiveCell(text: string) {
-    if (!activeCell) return;
-    activeCell.value = text;
-    activeCell.setSelectionRange(text.length, text.length);
-    activeCell.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  function backspaceActiveCell() {
-    if (!activeCell) return;
-    const el = activeCell;
-    const start = el.selectionStart ?? el.value.length;
-    const end = el.selectionEnd ?? el.value.length;
-    let next: string;
-    let pos: number;
-    if (start !== end) {
-      next = el.value.slice(0, start) + el.value.slice(end);
-      pos = start;
-    } else if (start > 0) {
-      next = el.value.slice(0, start - 1) + el.value.slice(start);
-      pos = start - 1;
-    } else {
-      return;
-    }
-    el.value = next;
-    el.setSelectionRange(pos, pos);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  const keypadEl = document.createElement("div");
-  keypadEl.className = "note-keypad note-keypad--inactive";
-
-  function keypadButton(label: string, onPress: () => void, extraClass = ""): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = `note-keypad__btn ${extraClass}`.trim();
-    btn.textContent = label;
-    // Prevent the button from stealing focus away from the active cell.
-    btn.addEventListener("pointerdown", (e) => e.preventDefault());
-    btn.addEventListener("click", onPress);
-    return btn;
-  }
-
-  const digitsRow = document.createElement("div");
-  digitsRow.className = "note-keypad__row";
-  for (const digit of KEYPAD_DIGITS) {
-    digitsRow.appendChild(keypadButton(digit, () => activeCell && insertAtCursor(activeCell, digit)));
-  }
-  keypadEl.appendChild(digitsRow);
-
-  const symbolsRow = document.createElement("div");
-  symbolsRow.className = "note-keypad__row";
-  for (const symbol of KEYPAD_SYMBOLS) {
-    symbolsRow.appendChild(
-      keypadButton(symbol, () => replaceActiveCell(symbol), "note-keypad__btn--symbol")
-    );
-  }
-  symbolsRow.appendChild(keypadButton("⌫", () => backspaceActiveCell(), "note-keypad__btn--del"));
-  keypadEl.appendChild(symbolsRow);
-
-  linesEl.addEventListener("focusin", (e) => {
-    const target = e.target;
-    if (target instanceof HTMLInputElement && target.classList.contains("editor-cell")) {
-      activeCell = target;
-      target.select();
-      keypadEl.classList.remove("note-keypad--inactive");
-    }
-  });
-  linesEl.addEventListener("focusout", (e) => {
-    const related = e.relatedTarget;
-    if (
-      related instanceof HTMLInputElement &&
-      related.classList.contains("editor-cell")
-    ) {
-      return;
-    }
-    activeCell = null;
-    keypadEl.classList.add("note-keypad--inactive");
-  });
-
-  function focusCell(lineIndex: number, colIndex: number, stringIndex: number) {
-    const selector = `.editor-line[data-line="${lineIndex}"] .editor-col[data-col="${colIndex}"] .editor-cell[data-string="${stringIndex}"]`;
-    container.querySelector<HTMLInputElement>(selector)?.focus();
-  }
-
   function renderLines() {
-    activeCell = null;
-    keypadEl.classList.add("note-keypad--inactive");
     linesEl.innerHTML = "";
     song.lines.forEach((line, lineIndex) => {
-      linesEl.appendChild(renderLineEditor(line, lineIndex));
+      linesEl.appendChild(renderLineEditor(line, lineIndex, lineIndex === song.lines.length - 1));
     });
-    if (pendingFocus) {
-      const { lineIndex, colIndex, stringIndex } = pendingFocus;
-      pendingFocus = null;
-      focusCell(lineIndex, colIndex, stringIndex);
-    }
   }
 
-  function renderLineEditor(line: TabLine, lineIndex: number): HTMLElement {
+  function renderReadOnlyColumn(chord: TabChord): HTMLElement {
+    const col = document.createElement("div");
+    col.className = "editor-col";
+    chord.frets.forEach((fret) => {
+      const cell = document.createElement("div");
+      cell.className = "editor-cell editor-cell--readonly";
+      cell.textContent = fret || "";
+      col.appendChild(cell);
+    });
+    return col;
+  }
+
+  function renderLineEditor(line: TabLine, lineIndex: number, isActive: boolean): HTMLElement {
     const lineEl = document.createElement("div");
-    lineEl.className = "editor-line";
+    lineEl.className = "editor-line" + (isActive ? " editor-line--active" : "");
     lineEl.dataset.line = String(lineIndex);
 
     const header = document.createElement("div");
@@ -223,78 +206,71 @@ export function renderSongEditor(song: TabSong, opts: EditSongOptions): HTMLElem
 
     const gridEl = document.createElement("div");
     gridEl.className = "editor-grid";
-
-    line.chords.forEach((chord, colIndex) => {
-      const col = document.createElement("div");
-      col.className = "editor-col";
-      col.dataset.col = String(colIndex);
-
-      const delBtn = document.createElement("button");
-      delBtn.type = "button";
-      delBtn.className = "editor-col__del";
-      delBtn.textContent = "×";
-      delBtn.title = "Remove note";
-      delBtn.addEventListener("click", () => {
-        line.chords.splice(colIndex, 1);
-        opts.onChange();
-        renderLines();
-      });
-      col.appendChild(delBtn);
-
-      for (let s = 0; s < song.stringCount; s++) {
-        const cell = document.createElement("input");
-        cell.type = "text";
-        // Suppress the OS keyboard — the note keypad below handles input.
-        cell.inputMode = "none";
-        cell.autocapitalize = "off";
-        cell.spellcheck = false;
-        cell.maxLength = 2;
-        cell.className = "editor-cell";
-        cell.dataset.string = String(s);
-        cell.value = chord.frets[s] ?? "";
-        cell.addEventListener("input", () => {
-          chord.frets[s] = cell.value;
-          opts.onChange();
-        });
-        col.appendChild(cell);
-      }
-
-      gridEl.appendChild(col);
+    line.chords.forEach((chord) => {
+      gridEl.appendChild(renderReadOnlyColumn(chord));
     });
-
-    const addColBtn = document.createElement("button");
-    addColBtn.type = "button";
-    addColBtn.className = "editor-col__add";
-    addColBtn.textContent = "+";
-    addColBtn.title = "Add note";
-    addColBtn.addEventListener("click", () => {
-      line.chords.push({ frets: new Array(song.stringCount).fill("") });
-      pendingFocus = { lineIndex, colIndex: line.chords.length - 1, stringIndex: 0 };
-      opts.onChange();
-      renderLines();
-    });
-    gridEl.appendChild(addColBtn);
-
     lineEl.appendChild(gridEl);
+
     return lineEl;
   }
 
+  rebuildWheels();
   renderLines();
 
-  const addLineBtn = document.createElement("button");
-  addLineBtn.type = "button";
-  addLineBtn.className = "editor-add-line";
-  addLineBtn.textContent = "+ Add line";
-  addLineBtn.addEventListener("click", () => {
-    song.lines.push({ chords: [{ frets: new Array(song.stringCount).fill("") }] });
+  // --- Keypad: top controls (nav / reset / new line), wheels, bottom controls ---
+
+  const keypadEl = document.createElement("div");
+  keypadEl.className = "note-keypad";
+
+  function ctrlButton(label: string, onPress?: () => void, extraClass = ""): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `note-keypad__ctrl-btn ${extraClass}`.trim();
+    btn.textContent = label;
+    if (onPress) btn.addEventListener("click", onPress);
+    else btn.disabled = true;
+    return btn;
+  }
+
+  const topControls = document.createElement("div");
+  topControls.className = "note-keypad__controls";
+  const navBtn = ctrlButton("⟷");
+  navBtn.title = "Jump between placed notes — coming soon";
+  const resetBtn = ctrlButton("Reset", () => resetPending());
+  const returnBtn = ctrlButton("Return", () => {
+    song.lines.push({ chords: [] });
+    opts.onChange();
+    resetPending();
+    renderLines();
+  });
+  topControls.append(navBtn, resetBtn, returnBtn);
+  keypadEl.appendChild(topControls);
+
+  keypadEl.appendChild(wheelsRow);
+
+  const bottomControls = document.createElement("div");
+  bottomControls.className = "note-keypad__controls";
+  const deleteBtn = ctrlButton("Delete", () => {
+    const line = activeLine();
+    if (line.chords.length === 0) return;
+    line.chords.pop();
     opts.onChange();
     renderLines();
-    const newAnnotation = linesEl.querySelector<HTMLInputElement>(
-      `.editor-line[data-line="${song.lines.length - 1}"] .editor-annotation-input`
-    );
-    newAnnotation?.focus();
+  }, "note-keypad__ctrl-btn--danger");
+  const spaceBtn = ctrlButton("Space", () => {
+    activeLine().chords.push({ frets: new Array(song.stringCount).fill("") });
+    opts.onChange();
+    renderLines();
   });
-  container.appendChild(addLineBtn);
+  const enterBtn = ctrlButton("Enter", () => {
+    activeLine().chords.push({ frets: [...pending] });
+    opts.onChange();
+    resetPending();
+    renderLines();
+  }, "note-keypad__ctrl-btn--accent");
+  bottomControls.append(deleteBtn, spaceBtn, enterBtn);
+  keypadEl.appendChild(bottomControls);
+
   container.appendChild(keypadEl);
 
   return container;
