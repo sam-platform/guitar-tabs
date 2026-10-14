@@ -249,6 +249,7 @@ body {
 
 .editor {
   max-width: 48em;
+  padding-bottom: 180px;
 }
 
 .editor-title-input {
@@ -429,6 +430,61 @@ body {
 
 .editor-add-line:active {
   background: var(--bg-sunken);
+}
+
+/* --- Note keypad --- */
+
+.note-keypad {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+  transition: opacity 0.15s;
+}
+
+.note-keypad--inactive {
+  opacity: 0.45;
+}
+
+.note-keypad__row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.note-keypad__btn {
+  flex: 1 1 32px;
+  max-width: 48px;
+  height: 44px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.note-keypad__btn:active {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+.note-keypad__btn--symbol {
+  color: var(--accent);
+}
+
+.note-keypad__btn--del {
+  color: var(--danger);
 }
 
 /* --- Confirm modal --- */

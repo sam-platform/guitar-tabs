@@ -3,6 +3,10 @@ import type { TabLine, TabSong } from "../tab/model";
 const MIN_STRINGS = 4;
 const MAX_STRINGS = 8;
 
+const KEYPAD_DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+/** Non-numeric symbols a fret cell can hold, per the TabChord format. */
+const KEYPAD_SYMBOLS = ["h", "p", "b", "/", "\\", "x", "|"];
+
 export interface EditSongOptions {
   /** Called after any mutation to `song` (cell edit, add/remove, title/annotation change). */
   onChange: () => void;
@@ -74,6 +78,97 @@ export function renderSongEditor(song: TabSong, opts: EditSongOptions): HTMLElem
   container.appendChild(linesEl);
 
   let pendingFocus: PendingFocus | null = null;
+  let activeCell: HTMLInputElement | null = null;
+
+  function insertAtCursor(el: HTMLInputElement, text: string) {
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    const next = el.value.slice(0, start) + text + el.value.slice(end);
+    if (el.maxLength >= 0 && next.length > el.maxLength) return;
+    el.value = next;
+    const pos = start + text.length;
+    el.setSelectionRange(pos, pos);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function replaceActiveCell(text: string) {
+    if (!activeCell) return;
+    activeCell.value = text;
+    activeCell.setSelectionRange(text.length, text.length);
+    activeCell.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function backspaceActiveCell() {
+    if (!activeCell) return;
+    const el = activeCell;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    let next: string;
+    let pos: number;
+    if (start !== end) {
+      next = el.value.slice(0, start) + el.value.slice(end);
+      pos = start;
+    } else if (start > 0) {
+      next = el.value.slice(0, start - 1) + el.value.slice(start);
+      pos = start - 1;
+    } else {
+      return;
+    }
+    el.value = next;
+    el.setSelectionRange(pos, pos);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  const keypadEl = document.createElement("div");
+  keypadEl.className = "note-keypad note-keypad--inactive";
+
+  function keypadButton(label: string, onPress: () => void, extraClass = ""): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `note-keypad__btn ${extraClass}`.trim();
+    btn.textContent = label;
+    // Prevent the button from stealing focus away from the active cell.
+    btn.addEventListener("pointerdown", (e) => e.preventDefault());
+    btn.addEventListener("click", onPress);
+    return btn;
+  }
+
+  const digitsRow = document.createElement("div");
+  digitsRow.className = "note-keypad__row";
+  for (const digit of KEYPAD_DIGITS) {
+    digitsRow.appendChild(keypadButton(digit, () => activeCell && insertAtCursor(activeCell, digit)));
+  }
+  keypadEl.appendChild(digitsRow);
+
+  const symbolsRow = document.createElement("div");
+  symbolsRow.className = "note-keypad__row";
+  for (const symbol of KEYPAD_SYMBOLS) {
+    symbolsRow.appendChild(
+      keypadButton(symbol, () => replaceActiveCell(symbol), "note-keypad__btn--symbol")
+    );
+  }
+  symbolsRow.appendChild(keypadButton("⌫", () => backspaceActiveCell(), "note-keypad__btn--del"));
+  keypadEl.appendChild(symbolsRow);
+
+  linesEl.addEventListener("focusin", (e) => {
+    const target = e.target;
+    if (target instanceof HTMLInputElement && target.classList.contains("editor-cell")) {
+      activeCell = target;
+      target.select();
+      keypadEl.classList.remove("note-keypad--inactive");
+    }
+  });
+  linesEl.addEventListener("focusout", (e) => {
+    const related = e.relatedTarget;
+    if (
+      related instanceof HTMLInputElement &&
+      related.classList.contains("editor-cell")
+    ) {
+      return;
+    }
+    activeCell = null;
+    keypadEl.classList.add("note-keypad--inactive");
+  });
 
   function focusCell(lineIndex: number, colIndex: number, stringIndex: number) {
     const selector = `.editor-line[data-line="${lineIndex}"] .editor-col[data-col="${colIndex}"] .editor-cell[data-string="${stringIndex}"]`;
@@ -81,6 +176,8 @@ export function renderSongEditor(song: TabSong, opts: EditSongOptions): HTMLElem
   }
 
   function renderLines() {
+    activeCell = null;
+    keypadEl.classList.add("note-keypad--inactive");
     linesEl.innerHTML = "";
     song.lines.forEach((line, lineIndex) => {
       linesEl.appendChild(renderLineEditor(line, lineIndex));
@@ -147,7 +244,8 @@ export function renderSongEditor(song: TabSong, opts: EditSongOptions): HTMLElem
       for (let s = 0; s < song.stringCount; s++) {
         const cell = document.createElement("input");
         cell.type = "text";
-        cell.inputMode = "text";
+        // Suppress the OS keyboard — the note keypad below handles input.
+        cell.inputMode = "none";
         cell.autocapitalize = "off";
         cell.spellcheck = false;
         cell.maxLength = 2;
@@ -188,7 +286,7 @@ export function renderSongEditor(song: TabSong, opts: EditSongOptions): HTMLElem
   addLineBtn.className = "editor-add-line";
   addLineBtn.textContent = "+ Add line";
   addLineBtn.addEventListener("click", () => {
-    song.lines.push({ chords: [] });
+    song.lines.push({ chords: [{ frets: new Array(song.stringCount).fill("") }] });
     opts.onChange();
     renderLines();
     const newAnnotation = linesEl.querySelector<HTMLInputElement>(
@@ -197,6 +295,7 @@ export function renderSongEditor(song: TabSong, opts: EditSongOptions): HTMLElem
     newAnnotation?.focus();
   });
   container.appendChild(addLineBtn);
+  container.appendChild(keypadEl);
 
   return container;
 }

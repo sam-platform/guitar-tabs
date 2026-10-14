@@ -4,7 +4,7 @@ export function createEmptySong(stringCount = 6): TabSong {
   return {
     title: "Untitled",
     stringCount,
-    lines: [{ chords: [] }],
+    lines: [{ chords: [{ frets: new Array(stringCount).fill("") }] }],
     updatedAt: new Date().toISOString(),
   };
 }
